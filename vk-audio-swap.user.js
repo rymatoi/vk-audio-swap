@@ -3,12 +3,14 @@
 // @namespace    vk-audio-swap
 // @version      3.2
 // @description  Подмена аудиодорожки локальным файлом для видео VK/VKVideo (без скачивания видео). Запоминает выбор для каждого видео.
+// @description:ru Подмена аудиодорожки локальным файлом для видео VK/VKVideo (без скачивания видео). Запоминает выбор для каждого видео.
 // @description:en Swap VK/VKVideo audio with a local track (no download). Remembers selection per video.
 // @name:en      VK Audio Swap (sync + ad-resilient)
 // @match        https://vk.com/*
 // @match        https://vkvideo.ru/*
 // @match        https://m.vk.com/*
 // @run-at       document-idle
+// @author       rymatoi
 // @grant        GM_addStyle
 // @downloadURL  https://raw.githubusercontent.com/rymatoi/vk-audio-swap/main/vk-audio-swap.user.js
 // @updateURL    https://raw.githubusercontent.com/rymatoi/vk-audio-swap/main/vk-audio-swap.user.js
