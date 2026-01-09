@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         VK Audio Swap
-// @namespace    https://github.com/vk-audio-swap
-// @version      3.1.0
-// @description  Swap VK video audio with a custom track and keep sync after ads.
+// @name         VK Audio Swap (синхронизация + устойчивость после рекламы)
+// @namespace    vk-audio-swap
+// @version      3.2
+// @description  Подмена аудиодорожки локальным файлом для видео VK/VKVideo (без скачивания видео). Запоминает выбор для каждого видео.
 // @match        https://vk.com/*
 // @match        https://vkvideo.ru/*
 // @match        https://m.vk.com/*
@@ -19,12 +19,19 @@
   const DB_NAME = 'vkAudioSwapDB';
   const DB_VER = 1;
 
+  const TXT = {
+    ORIGINAL: 'Оригинал',
+    ADD_AUDIO: 'Добавить аудио…',
+    DELETE_CURRENT: 'Удалить дорожку',
+    TRACK_FALLBACK: 'Аудиодорожка',
+  };
+
   GM_addStyle(`
     #${MENU_ID}{
       position: fixed;
       z-index: 2147483647;
       min-width: 240px;
-      max-width: 340px;
+      max-width: 360px;
       background: rgba(20,20,20,.95);
       color: #fff;
       border: 1px solid rgba(255,255,255,.12);
@@ -165,22 +172,32 @@
 
   const S = {
     selectedId: null,
-    selectedName: 'Original',
+    selectedName: TXT.ORIGINAL,
     selectedBlob: null,
+
     video: null,
     audio: null,
     audioUrl: null,
+
     wiredToVideo: null,
     handlers: null,
   };
 
+  function shortLabel(name) {
+    const s = (name || '').trim();
+    if (!s) return TXT.TRACK_FALLBACK;
+    return s.length > 18 ? (s.slice(0, 17) + '…') : s;
+  }
+
   function setBtnLabel(text) {
     const b = document.getElementById(BTN_ID);
     if (!b) return;
-    const lab = b.querySelector('.vkvas-label');
-    if (lab) lab.textContent = text;
-    b.title = text;
-    b.setAttribute('aria-label', text);
+
+    const labelEl = b.querySelector('.vkvas-label');
+    if (labelEl) labelEl.textContent = text || '';
+
+    b.title = text || '';
+    b.setAttribute('aria-label', text || '');
   }
 
   function ensureAudioObject() {
@@ -201,13 +218,9 @@
 
   function cleanupAudio() {
     stopAudio();
-    if (S.audio) {
-      try { S.audio.src = ''; } catch {}
-    }
+    if (S.audio) { try { S.audio.src = ''; } catch {} }
     S.audio = null;
-    if (S.audioUrl) {
-      try { URL.revokeObjectURL(S.audioUrl); } catch {}
-    }
+    if (S.audioUrl) { try { URL.revokeObjectURL(S.audioUrl); } catch {} }
     S.audioUrl = null;
   }
 
@@ -286,7 +299,7 @@
       },
       onTimeupdate: () => { tryPlayAudioSync(); },
       onRate: () => {
-        if (S.audio) {
+        if (S.audio && S.video) {
           try { S.audio.playbackRate = S.video.playbackRate; } catch {}
         }
       },
@@ -314,23 +327,24 @@
 
   async function selectOriginal() {
     S.selectedId = null;
-    S.selectedName = 'Original';
+    S.selectedName = TXT.ORIGINAL;
     S.selectedBlob = null;
 
     cleanupAudio();
     if (S.video) {
       try { S.video.muted = false; } catch {}
     }
-    setBtnLabel('Original');
+    setBtnLabel(TXT.ORIGINAL);
   }
 
   async function selectCustom(trackId, name, blob) {
     S.selectedId = trackId;
-    S.selectedName = name || 'Custom';
+    S.selectedName = name || TXT.TRACK_FALLBACK;
     S.selectedBlob = blob;
 
     cleanupAudio();
     setBtnLabel(S.selectedName);
+
     wireToVideo(findVideo());
     await tryPlayAudioSync();
   }
@@ -364,22 +378,23 @@
     m.style.visibility = 'hidden';
     document.body.appendChild(m);
 
-    m.appendChild(row(selectedId === null ? '●' : '○', 'Original', async () => {
+    m.appendChild(row(selectedId === null ? '●' : '○', TXT.ORIGINAL, async () => {
       await setSelected(videoKey, null);
       await selectOriginal();
     }));
 
     for (const t of tracks.sort((a, b) => a.addedAt - b.addedAt)) {
       const isSel = selectedId === t.id;
-      m.appendChild(row(isSel ? '●' : '○', t.name || `Track #${t.id}`, async () => {
+      m.appendChild(row(isSel ? '●' : '○', t.name || TXT.TRACK_FALLBACK, async () => {
         await setSelected(videoKey, t.id);
         await selectCustom(t.id, t.name, t.blob);
       }));
     }
 
-    m.appendChild(row('➕', 'Add audio…', async () => {
+    m.appendChild(row('➕', TXT.ADD_AUDIO, async () => {
       const f = await pickAudioFile();
       if (!f) return;
+
       await addTrack(videoKey, f.name, f);
 
       const refreshed = await getTracks(videoKey);
@@ -391,7 +406,7 @@
     }));
 
     if (selectedId !== null) {
-      m.appendChild(row('🗑️', 'Delete current', async () => {
+      m.appendChild(row('🗑️', TXT.DELETE_CURRENT, async () => {
         await deleteTrack(selectedId);
         await setSelected(videoKey, null);
         await selectOriginal();
@@ -419,7 +434,13 @@
   }
 
   function isShare(el) {
-    const t = (el.innerText || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim().toLowerCase();
+    if (!el) return false;
+    const t = (
+      el.innerText ||
+      el.getAttribute('aria-label') ||
+      el.getAttribute('title') ||
+      ''
+    ).trim().toLowerCase();
     return t === 'поделиться' || t.includes('поделиться') || t.includes('share');
   }
 
@@ -427,6 +448,56 @@
     const nodes = document.querySelectorAll('button, a, div[role="button"]');
     for (const el of nodes) if (isShare(el)) return el;
     return null;
+  }
+
+  function buildNativeLikeButtonFromShare(share) {
+    const btn = share.cloneNode(true);
+    btn.id = BTN_ID;
+
+    btn.removeAttribute('data-testid');
+
+    const leafTextNodes = [];
+    const walker = document.createTreeWalker(btn, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const t = (node.nodeValue || '').trim();
+        if (!t) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+
+    while (walker.nextNode()) leafTextNodes.push(walker.currentNode);
+
+    const labelNode = leafTextNodes.find((n) => {
+      const t = (n.nodeValue || '').trim().toLowerCase();
+      return t === 'поделиться' || t.includes('поделиться') || t.includes('share');
+    });
+
+    if (labelNode) {
+      labelNode.nodeValue = TXT.ORIGINAL;
+      if (labelNode.parentElement) labelNode.parentElement.classList.add('vkvas-label');
+    } else {
+      const fallback = btn.querySelector('span') || btn;
+      fallback.classList.add('vkvas-label');
+      fallback.textContent = TXT.ORIGINAL;
+    }
+
+    const svg = btn.querySelector('svg');
+    if (svg) {
+      svg.setAttribute('viewBox', '0 0 24 24');
+      svg.innerHTML = '<path fill="currentColor" d="M12 3a9 9 0 0 0-9 9v7a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-5a2 2 0 0 0-2-2H5a7 7 0 0 1 14 0h-2a2 2 0 0 0-2 2v5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-7a9 9 0 0 0-9-9z"/>';
+    }
+
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      await toggleMenu(btn);
+    }, true);
+
+    btn.title = TXT.ORIGINAL;
+    btn.setAttribute('aria-label', TXT.ORIGINAL);
+
+    return btn;
   }
 
   function ensureButton() {
@@ -438,28 +509,7 @@
     const container = share.parentElement;
     if (!container) return;
 
-    const btn = share.cloneNode(true);
-    btn.id = BTN_ID;
-    btn.textContent = '';
-
-    const icon = document.createElement('span');
-    icon.textContent = '🎧';
-    icon.style.marginRight = '6px';
-
-    const lab = document.createElement('span');
-    lab.className = 'vkvas-label';
-    lab.textContent = 'Original';
-
-    btn.appendChild(icon);
-    btn.appendChild(lab);
-
-    btn.addEventListener('click', async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      await toggleMenu(btn);
-    }, true);
-
+    const btn = buildNativeLikeButtonFromShare(share);
     container.insertBefore(btn, share.nextSibling);
 
     refreshFromCacheSilent().catch(() => {});
@@ -485,7 +535,7 @@
     }
 
     S.selectedId = t.id;
-    S.selectedName = t.name || 'Custom';
+    S.selectedName = t.name || TXT.TRACK_FALLBACK;
     S.selectedBlob = t.blob;
     setBtnLabel(S.selectedName);
 
